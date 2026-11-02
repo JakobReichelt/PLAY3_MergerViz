@@ -192,11 +192,6 @@ h1 {
   padding-top: 14px;
 }
 
-.merge-stage--mini {
-  padding: 8px 12px 4px;
-  background: rgba(255, 255, 255, 0.55);
-}
-
 .merge-stage__meta {
   display: flex;
   flex-wrap: wrap;
@@ -205,12 +200,6 @@ h1 {
   min-height: 1.4em;
   margin-bottom: 4px;
   font-size: 14px;
-}
-
-.merge-stage__meta--mini {
-  font-size: 12px;
-  color: var(--muted);
-  margin-bottom: 0;
 }
 
 .merge-stage__idle {
@@ -236,26 +225,78 @@ h1 {
   display: block;
   width: 100%;
   height: auto;
-  max-height: 220px;
+  max-height: 280px;
 }
 
-.merge-stage__svg--mini {
-  max-height: 96px;
+.timeline {
+  margin-top: 14px;
+  outline: none;
 }
 
-.progress-wrap {
-  margin-top: 12px;
-  height: 4px;
+.timeline:focus-visible .timeline__track {
+  box-shadow: 0 0 0 2px rgba(232, 93, 4, 0.35);
+}
+
+.timeline__track {
+  position: relative;
+  height: 14px;
   background: rgba(11, 31, 42, 0.08);
   border-radius: 999px;
-  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
 }
 
-.progress-bar {
-  height: 100%;
-  background: linear-gradient(90deg, var(--signal), var(--glow));
+.timeline.is-scrubbing .timeline__track,
+.timeline__track:active {
+  cursor: grabbing;
+}
+
+.timeline__fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
   width: 0%;
-  transition: width 0.12s linear;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--signal), var(--glow));
+  pointer-events: none;
+}
+
+.timeline__thumb {
+  position: absolute;
+  top: 50%;
+  left: 0%;
+  width: 18px;
+  height: 18px;
+  margin-left: -9px;
+  margin-top: -9px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--signal);
+  box-shadow: 0 1px 4px rgba(11, 31, 42, 0.22);
+  pointer-events: none;
+}
+
+.timeline__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: baseline;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#timeline-pos {
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+#timeline-date {
+  margin-left: auto;
+  color: var(--signal-deep);
+  font-weight: 600;
 }
 
 .map-shell {
@@ -384,8 +425,7 @@ h1 {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .btn,
-  .progress-bar {
+  .btn {
     transition: none;
   }
 }

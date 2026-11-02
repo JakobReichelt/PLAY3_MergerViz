@@ -22,12 +22,15 @@
     yearFrom: document.getElementById("year-from"),
     yearTo: document.getElementById("year-to"),
     bar: document.getElementById("progress-bar"),
+    thumb: document.getElementById("timeline-thumb"),
+    timeline: document.getElementById("timeline"),
+    timelineTrack: document.getElementById("timeline-track"),
+    timelinePos: document.getElementById("timeline-pos"),
+    timelineDate: document.getElementById("timeline-date"),
     tip: document.getElementById("tooltip"),
     foot: document.getElementById("foot-note"),
     metaTop: document.getElementById("merge-meta-top"),
-    metaBottom: document.getElementById("merge-meta-bottom"),
     svgTop: document.getElementById("merge-svg-top"),
-    svgBottom: document.getElementById("merge-svg-bottom"),
   };
 
   els.stats.innerHTML = [
@@ -50,6 +53,11 @@
     maxZoom: 8,
     zoomControl: true,
   }).setView([20, 10], 2);
+
+  map.createPane("companiesPane");
+  map.getPane("companiesPane").style.zIndex = 450;
+  map.createPane("mergePane");
+  map.getPane("mergePane").style.zIndex = 650;
 
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution:
@@ -100,6 +108,7 @@
       fillOpacity: 0.72,
       opacity: 0.9,
       className: "company-bubble",
+      pane: "companiesPane",
     });
     marker.companyId = c.id;
     marker.on("mouseover", (e) => showTip(c, e.originalEvent));
@@ -134,10 +143,12 @@
   let phase = "idle";
   let mergeIdx = 0;
   let progress = 0;
+  let pauseLeft = 0; // ms hold after a merger finishes
   let raf = null;
   let lastTs = 0;
   let mergedBubble = null;
   let trailLines = [];
+  let isScrubbing = false;
 
   function yearOf(m) {
     if (!m.date) return null;
@@ -191,14 +202,142 @@
     }
   }
 
+  function timelineT() {
+    if (!merges.length) return 0;
+    if (phase === "idle") return 0;
+    return Math.min(1, (mergeIdx + Math.min(progress, 1)) / merges.length);
+  }
+
   function updateProgressBar() {
-    if (!merges.length) {
-      els.bar.style.width = "0%";
+    const t = timelineT();
+    const pct = `${(t * 100).toFixed(3)}%`;
+    els.bar.style.width = pct;
+    els.thumb.style.left = pct;
+
+    const n = merges.length;
+    const idx = n ? Math.min(mergeIdx + 1, n) : 0;
+    els.timelinePos.textContent = `${idx} / ${n}`;
+    const m = n ? merges[Math.min(mergeIdx, n - 1)] : null;
+    els.timelineDate.textContent = m
+      ? `${m.date || "—"} · ${m.case_id}`
+      : "";
+
+    els.timeline.setAttribute("aria-valuemax", String(Math.max(n, 1)));
+    els.timeline.setAttribute("aria-valuenow", String(idx));
+  }
+
+  function seekToFraction(frac) {
+    if (!merges.length) return;
+    const f = Math.max(0, Math.min(1, frac));
+    const exact = f * merges.length;
+    let idx = Math.floor(exact);
+    let prog = exact - idx;
+    if (idx >= merges.length) {
+      idx = merges.length - 1;
+      prog = 1;
+    }
+    if (idx !== mergeIdx) {
+      mergeIdx = idx;
+      resetStyles();
+    }
+    progress = prog;
+    pauseLeft = 0;
+    if (phase === "idle" || phase === "done") phase = "paused";
+    setPlayLabel();
+    renderFrame();
+    updateProgressBar();
+  }
+
+  function fractionFromPointer(clientX) {
+    const rect = els.timelineTrack.getBoundingClientRect();
+    if (rect.width <= 0) return 0;
+    return (clientX - rect.left) / rect.width;
+  }
+
+  function beginScrub(clientX) {
+    if (phase === "playing") {
+      phase = "paused";
+      setPlayLabel();
+      if (raf) cancelAnimationFrame(raf);
+      raf = null;
+      lastTs = 0;
+    }
+    isScrubbing = true;
+    els.timeline.classList.add("is-scrubbing");
+    seekToFraction(fractionFromPointer(clientX));
+  }
+
+  function moveScrub(clientX) {
+    if (!isScrubbing) return;
+    seekToFraction(fractionFromPointer(clientX));
+  }
+
+  function endScrub() {
+    if (!isScrubbing) return;
+    isScrubbing = false;
+    els.timeline.classList.remove("is-scrubbing");
+    // Stay paused after scrub so the user can inspect; they can hit Play to continue
+  }
+
+  els.timelineTrack.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    els.timelineTrack.setPointerCapture(e.pointerId);
+    beginScrub(e.clientX);
+  });
+  els.timelineTrack.addEventListener("pointermove", (e) => {
+    if (!isScrubbing) return;
+    moveScrub(e.clientX);
+  });
+  els.timelineTrack.addEventListener("pointerup", endScrub);
+  els.timelineTrack.addEventListener("pointercancel", endScrub);
+
+  els.timeline.addEventListener(
+    "wheel",
+    (e) => {
+      if (!merges.length) return;
+      e.preventDefault();
+      const step = (e.deltaY > 0 ? 1 : -1) * (e.shiftKey ? 0.25 : 1);
+      // step in merger units
+      const cur = mergeIdx + progress;
+      const next = Math.max(0, Math.min(merges.length, cur + step));
+      if (phase === "playing") {
+        phase = "paused";
+        setPlayLabel();
+        if (raf) cancelAnimationFrame(raf);
+        raf = null;
+        lastTs = 0;
+      }
+      seekToFraction(next / merges.length);
+    },
+    { passive: false }
+  );
+
+  els.timeline.addEventListener("keydown", (e) => {
+    if (!merges.length) return;
+    let delta = 0;
+    if (e.key === "ArrowRight" || e.key === "ArrowUp") delta = e.shiftKey ? 0.25 : 1;
+    if (e.key === "ArrowLeft" || e.key === "ArrowDown") delta = e.shiftKey ? -0.25 : -1;
+    if (e.key === "Home") {
+      e.preventDefault();
+      seekToFraction(0);
       return;
     }
-    const t = (mergeIdx + progress) / merges.length;
-    els.bar.style.width = `${Math.min(100, t * 100)}%`;
-  }
+    if (e.key === "End") {
+      e.preventDefault();
+      seekToFraction(1);
+      return;
+    }
+    if (!delta) return;
+    e.preventDefault();
+    if (phase === "playing") {
+      phase = "paused";
+      setPlayLabel();
+      if (raf) cancelAnimationFrame(raf);
+      raf = null;
+      lastTs = 0;
+    }
+    seekToFraction((mergeIdx + progress + delta) / merges.length);
+  });
 
   function easeInOut(t) {
     return t * t * (3 - 2 * t);
@@ -236,29 +375,28 @@
     return byId.get(companyId)?.name || `Party ${fallbackIdx + 1}`;
   }
 
-  function diagramRadius(rev, scale) {
-    return Math.max(14 * scale, radiusFor(rev) * 1.35 * scale);
+  function diagramRadius(rev) {
+    return Math.max(28, radiusFor(rev) * 1.55);
   }
 
-  function drawMergeDiagram(svg, merge, p, mode) {
+  function drawMergeDiagram(svg, merge, p) {
     const NS = "http://www.w3.org/2000/svg";
     while (svg.firstChild) svg.removeChild(svg.firstChild);
 
-    const isMini = mode === "mini";
     const W = 960;
-    const H = isMini ? 110 : 220;
-    const scale = isMini ? 0.55 : 1;
-    const cy = H * 0.42;
-    const homeX = W * 0.32;
-    const startX = W * 0.72;
+    const H = 260;
+    const cy = 118;
+    const midX = W / 2;
+    const left0 = W * 0.22;
+    const right0 = W * 0.78;
 
     if (!merge) {
       const t = document.createElementNS(NS, "text");
-      t.setAttribute("x", String(W / 2));
+      t.setAttribute("x", String(midX));
       t.setAttribute("y", String(H / 2));
       t.setAttribute("text-anchor", "middle");
       t.setAttribute("fill", "#5a7380");
-      t.setAttribute("font-size", isMini ? "12" : "16");
+      t.setAttribute("font-size", "16");
       t.setAttribute("font-family", "IBM Plex Sans, sans-serif");
       t.textContent = "No merger selected";
       svg.appendChild(t);
@@ -268,157 +406,249 @@
     const ids = merge.parties.filter((id) => byId.has(id));
     if (ids.length < 2) {
       const t = document.createElementNS(NS, "text");
-      t.setAttribute("x", String(W / 2));
+      t.setAttribute("x", String(midX));
       t.setAttribute("y", String(H / 2));
       t.setAttribute("text-anchor", "middle");
       t.setAttribute("fill", "#5a7380");
-      t.setAttribute("font-size", isMini ? "12" : "16");
+      t.setAttribute("font-size", "16");
       t.textContent = "Need two matched parties";
       svg.appendChild(t);
       return;
     }
 
     const dest = mergeDestination(ids);
-    const otherId = ids.find((id) => id !== dest.id) || ids[1];
-    const extraCount = Math.max(0, ids.length - 2);
+    const aId = dest.id;
+    const bId = ids.find((id) => id !== aId) || ids[1];
+    const aCo = byId.get(aId);
+    const bCo = byId.get(bId);
+    const rA0 = diagramRadius(aCo.revenue);
+    const rB0 = diagramRadius(bCo.revenue);
+    const rMerged = Math.sqrt(rA0 * rA0 + rB0 * rB0);
 
-    const travelEnd = 0.58;
-    const absorbEnd = 0.72;
-    const homeCo = byId.get(dest.id);
-    const otherCo = byId.get(otherId);
-    const rHome0 = diagramRadius(homeCo.revenue, scale);
-    const rOther0 = diagramRadius(otherCo.revenue, scale);
-    const rMerged = Math.sqrt(rHome0 * rHome0 + rOther0 * rOther0);
+    // Smooth liquid timeline
+    const approachEnd = 0.62;
+    const fuseEnd = 0.82;
 
-    let otherX = startX;
-    let otherR = rOther0;
-    let otherOpacity = 1;
-    let homeR = rHome0;
-    let showMergedOnly = false;
+    let xA = left0;
+    let xB = right0;
+    let rA = rA0;
+    let rB = rB0;
+    let showDual = true;
     let mergedR = rMerged;
+    let labelBlend = 0;
 
-    if (p < travelEnd) {
-      const e = easeInOut(p / travelEnd);
-      otherX = startX + (homeX - startX) * e;
-    } else if (p < absorbEnd) {
-      const e = easeInOut((p - travelEnd) / (absorbEnd - travelEnd));
-      otherX = homeX;
-      otherR = Math.max(1, rOther0 * (1 - e));
-      otherOpacity = 1 - e;
-      homeR = rHome0 + (rMerged - rHome0) * e;
+    if (p < approachEnd) {
+      const e = easeInOut(p / approachEnd);
+      // Meet in the middle — leave a small overlap so goo connects
+      const gap = (rA0 + rB0) * 0.35;
+      xA = left0 + (midX - gap / 2 - left0) * e;
+      xB = right0 + (midX + gap / 2 - right0) * e;
+      // Soft squash as they near each other
+      const near = Math.max(0, (e - 0.55) / 0.45);
+      rA = rA0 * (1 + near * 0.08);
+      rB = rB0 * (1 + near * 0.08);
+    } else if (p < fuseEnd) {
+      const e = easeInOut((p - approachEnd) / (fuseEnd - approachEnd));
+      xA = midX - (rA0 * 0.12) * (1 - e);
+      xB = midX + (rB0 * 0.12) * (1 - e);
+      rA = rA0 * (1 - e) + rMerged * e * 0.55;
+      rB = rB0 * (1 - e) + rMerged * e * 0.55;
+      labelBlend = e;
     } else {
-      showMergedOnly = true;
-      const hold = (p - absorbEnd) / (1 - absorbEnd);
-      mergedR = rMerged * (reduceMotion ? 1 : 1 + 0.05 * Math.sin(hold * Math.PI));
+      showDual = false;
+      const hold = (p - fuseEnd) / (1 - fuseEnd);
+      mergedR =
+        rMerged * (reduceMotion ? 1 : 1 + 0.04 * Math.sin(hold * Math.PI));
+      labelBlend = 1;
     }
 
-    // Guide line
-    if (!showMergedOnly && otherOpacity > 0.05) {
-      const line = document.createElementNS(NS, "line");
-      line.setAttribute("x1", String(otherX));
-      line.setAttribute("y1", String(cy));
-      line.setAttribute("x2", String(homeX));
-      line.setAttribute("y2", String(cy));
-      line.setAttribute("stroke", "#ffb703");
-      line.setAttribute("stroke-width", isMini ? "1.5" : "2.5");
-      line.setAttribute("stroke-opacity", String(0.35 * otherOpacity));
-      line.setAttribute("stroke-dasharray", "6 6");
-      svg.appendChild(line);
-    }
+    // Goo / liquid filter
+    const defs = document.createElementNS(NS, "defs");
+    const filter = document.createElementNS(NS, "filter");
+    filter.setAttribute("id", "liquid-goo");
+    filter.setAttribute("x", "-40%");
+    filter.setAttribute("y", "-40%");
+    filter.setAttribute("width", "180%");
+    filter.setAttribute("height", "180%");
 
-    function addBubble(x, r, opacity, label, sub) {
-      const g = document.createElementNS(NS, "g");
-      g.setAttribute("opacity", String(opacity));
+    const blur = document.createElementNS(NS, "feGaussianBlur");
+    blur.setAttribute("in", "SourceGraphic");
+    blur.setAttribute("stdDeviation", reduceMotion ? "4" : "14");
+    blur.setAttribute("result", "blur");
+    filter.appendChild(blur);
 
+    const matrix = document.createElementNS(NS, "feColorMatrix");
+    matrix.setAttribute("in", "blur");
+    matrix.setAttribute("mode", "matrix");
+    matrix.setAttribute(
+      "values",
+      "1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 22 -8"
+    );
+    matrix.setAttribute("result", "goo");
+    filter.appendChild(matrix);
+
+    const composite = document.createElementNS(NS, "feComposite");
+    composite.setAttribute("in", "SourceGraphic");
+    composite.setAttribute("in2", "goo");
+    composite.setAttribute("operator", "atop");
+    filter.appendChild(composite);
+
+    defs.appendChild(filter);
+    svg.appendChild(defs);
+
+    const goo = document.createElementNS(NS, "g");
+    goo.setAttribute("filter", "url(#liquid-goo)");
+
+    function circle(x, r, fill) {
       const c = document.createElementNS(NS, "circle");
       c.setAttribute("cx", String(x));
       c.setAttribute("cy", String(cy));
       c.setAttribute("r", String(r));
-      c.setAttribute("fill", "#e85d04");
-      c.setAttribute("stroke", "#ffb703");
-      c.setAttribute("stroke-width", isMini ? "2" : "3");
-      g.appendChild(c);
-
-      const t = document.createElementNS(NS, "text");
-      t.setAttribute("x", String(x));
-      t.setAttribute("y", String(cy + r + (isMini ? 14 : 22)));
-      t.setAttribute("text-anchor", "middle");
-      t.setAttribute("fill", "#0b1f2a");
-      t.setAttribute("font-size", isMini ? "11" : "15");
-      t.setAttribute("font-weight", "600");
-      t.setAttribute("font-family", "Syne, IBM Plex Sans, sans-serif");
-      t.textContent = shortName(label, isMini ? 22 : 34);
-      g.appendChild(t);
-
-      if (sub && !isMini) {
-        const s = document.createElementNS(NS, "text");
-        s.setAttribute("x", String(x));
-        s.setAttribute("y", String(cy + r + 40));
-        s.setAttribute("text-anchor", "middle");
-        s.setAttribute("fill", "#5a7380");
-        s.setAttribute("font-size", "12");
-        s.setAttribute("font-family", "IBM Plex Sans, sans-serif");
-        s.textContent = sub;
-        g.appendChild(s);
-      }
-
-      svg.appendChild(g);
+      c.setAttribute("fill", fill);
+      return c;
     }
 
-    if (showMergedOnly) {
-      const labels = [
-        partyLabel(merge, dest.id, 0),
-        partyLabel(merge, otherId, 1),
-      ];
-      addBubble(
-        homeX,
-        mergedR,
-        1,
-        shortName(labels.join(" + "), isMini ? 28 : 42),
-        `${merge.case_id} · merged`
-      );
-      if (!isMini) {
-        const ring = document.createElementNS(NS, "circle");
-        ring.setAttribute("cx", String(homeX));
-        ring.setAttribute("cy", String(cy));
-        ring.setAttribute("r", String(mergedR * 1.25));
-        ring.setAttribute("fill", "none");
-        ring.setAttribute("stroke", "#ffb703");
-        ring.setAttribute("stroke-width", "2");
-        ring.setAttribute("opacity", "0.35");
-        svg.appendChild(ring);
-      }
+    if (showDual) {
+      goo.appendChild(circle(xA, rA, "#e85d04"));
+      goo.appendChild(circle(xB, rB, "#f48c06"));
     } else {
-      addBubble(
-        homeX,
-        homeR,
-        1,
-        partyLabel(merge, dest.id, 0),
-        `${homeCo.city || homeCo.iso} · destination`
-      );
-      addBubble(
-        otherX,
-        otherR,
-        otherOpacity,
-        partyLabel(merge, otherId, 1),
-        `${otherCo.city || otherCo.iso}${extraCount ? ` · +${extraCount} more` : ""}`
-      );
+      goo.appendChild(circle(midX, mergedR, "#e85d04"));
+    }
+    svg.appendChild(goo);
+
+    // Crisp highlight ring on top of goo
+    const rim = document.createElementNS(NS, "circle");
+    rim.setAttribute("cx", String(showDual ? (xA + xB) / 2 : midX));
+    rim.setAttribute("cy", String(cy));
+    rim.setAttribute(
+      "r",
+      String(
+        showDual
+          ? Math.max(Math.abs(xB - xA) / 2 + Math.min(rA, rB) * 0.35, Math.max(rA, rB))
+          : mergedR
+      )
+    );
+    rim.setAttribute("fill", "none");
+    rim.setAttribute("stroke", "#ffb703");
+    rim.setAttribute("stroke-width", showDual ? "0" : "2.5");
+    rim.setAttribute("opacity", showDual ? "0" : "0.7");
+    svg.appendChild(rim);
+
+    function label(x, text, yOff, weight) {
+      const t = document.createElementNS(NS, "text");
+      t.setAttribute("x", String(x));
+      t.setAttribute("y", String(cy + yOff));
+      t.setAttribute("text-anchor", "middle");
+      t.setAttribute("fill", "#0b1f2a");
+      t.setAttribute("font-size", "15");
+      t.setAttribute("font-weight", weight || "600");
+      t.setAttribute("font-family", "Syne, IBM Plex Sans, sans-serif");
+      t.textContent = text;
+      svg.appendChild(t);
+    }
+
+    function sub(x, text, yOff) {
+      const t = document.createElementNS(NS, "text");
+      t.setAttribute("x", String(x));
+      t.setAttribute("y", String(cy + yOff));
+      t.setAttribute("text-anchor", "middle");
+      t.setAttribute("fill", "#5a7380");
+      t.setAttribute("font-size", "12");
+      t.setAttribute("font-family", "IBM Plex Sans, sans-serif");
+      t.textContent = text;
+      svg.appendChild(t);
+    }
+
+    const nameA = partyLabel(merge, aId, 0);
+    const nameB = partyLabel(merge, bId, 1);
+
+    if (labelBlend < 0.55) {
+      const fade = 1 - labelBlend / 0.55;
+      const g = document.createElementNS(NS, "g");
+      g.setAttribute("opacity", String(fade));
+      svg.appendChild(g);
+      // recreate labels with opacity via group — simpler: draw directly with fade via attribute
+    }
+
+    if (labelBlend < 0.7) {
+      const fade = Math.max(0, 1 - labelBlend / 0.7);
+      const gL = document.createElementNS(NS, "g");
+      gL.setAttribute("opacity", String(fade));
+      const t1 = document.createElementNS(NS, "text");
+      t1.setAttribute("x", String(xA));
+      t1.setAttribute("y", String(cy + rA + 24));
+      t1.setAttribute("text-anchor", "middle");
+      t1.setAttribute("fill", "#0b1f2a");
+      t1.setAttribute("font-size", "15");
+      t1.setAttribute("font-weight", "600");
+      t1.setAttribute("font-family", "Syne, IBM Plex Sans, sans-serif");
+      t1.textContent = shortName(nameA, 28);
+      gL.appendChild(t1);
+      const s1 = document.createElementNS(NS, "text");
+      s1.setAttribute("x", String(xA));
+      s1.setAttribute("y", String(cy + rA + 42));
+      s1.setAttribute("text-anchor", "middle");
+      s1.setAttribute("fill", "#5a7380");
+      s1.setAttribute("font-size", "12");
+      s1.textContent = aCo.city || aCo.iso;
+      gL.appendChild(s1);
+
+      const t2 = document.createElementNS(NS, "text");
+      t2.setAttribute("x", String(xB));
+      t2.setAttribute("y", String(cy + rB + 24));
+      t2.setAttribute("text-anchor", "middle");
+      t2.setAttribute("fill", "#0b1f2a");
+      t2.setAttribute("font-size", "15");
+      t2.setAttribute("font-weight", "600");
+      t2.setAttribute("font-family", "Syne, IBM Plex Sans, sans-serif");
+      t2.textContent = shortName(nameB, 28);
+      gL.appendChild(t2);
+      const s2 = document.createElementNS(NS, "text");
+      s2.setAttribute("x", String(xB));
+      s2.setAttribute("y", String(cy + rB + 42));
+      s2.setAttribute("text-anchor", "middle");
+      s2.setAttribute("fill", "#5a7380");
+      s2.setAttribute("font-size", "12");
+      s2.textContent = bCo.city || bCo.iso;
+      gL.appendChild(s2);
+      svg.appendChild(gL);
+    }
+
+    if (labelBlend > 0.35) {
+      const fade = Math.min(1, (labelBlend - 0.35) / 0.45);
+      const gM = document.createElementNS(NS, "g");
+      gM.setAttribute("opacity", String(fade));
+      const tm = document.createElementNS(NS, "text");
+      tm.setAttribute("x", String(midX));
+      tm.setAttribute("y", String(cy + (showDual ? Math.max(rA, rB) : mergedR) + 26));
+      tm.setAttribute("text-anchor", "middle");
+      tm.setAttribute("fill", "#0b1f2a");
+      tm.setAttribute("font-size", "16");
+      tm.setAttribute("font-weight", "700");
+      tm.setAttribute("font-family", "Syne, IBM Plex Sans, sans-serif");
+      tm.textContent = shortName(`${nameA} + ${nameB}`, 40);
+      gM.appendChild(tm);
+      const sm = document.createElementNS(NS, "text");
+      sm.setAttribute("x", String(midX));
+      sm.setAttribute("y", String(cy + (showDual ? Math.max(rA, rB) : mergedR) + 46));
+      sm.setAttribute("text-anchor", "middle");
+      sm.setAttribute("fill", "#5a7380");
+      sm.setAttribute("font-size", "12");
+      sm.textContent = `${merge.case_id} · merged`;
+      gM.appendChild(sm);
+      svg.appendChild(gM);
     }
   }
 
   function updateMergeStages() {
     const m =
-      phase === "idle"
-        ? merges[0] || null
-        : merges[mergeIdx] || null;
+      phase === "idle" ? merges[0] || null : merges[mergeIdx] || null;
     const p = phase === "idle" ? 0 : progress;
 
     if (!m) {
       els.metaTop.innerHTML =
         '<span class="merge-stage__idle">No mergers in this year range</span>';
-      els.metaBottom.textContent = "";
-      drawMergeDiagram(els.svgTop, null, 0, "hero");
-      drawMergeDiagram(els.svgBottom, null, 0, "mini");
+      drawMergeDiagram(els.svgTop, null, 0);
       return;
     }
 
@@ -433,10 +663,7 @@
       m.case_id
     )}</span><span class="merge-stage__title">${escapeHtml(m.title)}</span>`;
 
-    els.metaBottom.textContent = `${m.case_id} · ${m.labels?.slice(0, 2).join(" → ") || m.title}`;
-
-    drawMergeDiagram(els.svgTop, m, p, "hero");
-    drawMergeDiagram(els.svgBottom, m, p, "mini");
+    drawMergeDiagram(els.svgTop, m, p);
   }
 
   function renderFrame() {
@@ -559,6 +786,7 @@
         fillOpacity: 0.92,
         opacity: 1,
         interactive: false,
+        pane: "mergePane",
       }).addTo(map);
 
       trailLines.push(
@@ -569,12 +797,55 @@
           fillOpacity: 0,
           opacity: Math.max(0, 0.55 - hold * 0.55),
           interactive: false,
+          pane: "mergePane",
         }).addTo(map)
       );
     }
 
+    // Draw merging companies above every other bubble
+    for (const id of ids) {
+      const marker = markers.get(id);
+      if (!marker) continue;
+      const el = marker.getElement && marker.getElement();
+      if (el && el.parentElement) {
+        el.parentElement.appendChild(el);
+      } else if (marker.bringToFront) {
+        marker.bringToFront();
+      }
+    }
+    if (mergedBubble && mergedBubble.bringToFront) mergedBubble.bringToFront();
+
     updateMergeStages();
     updateProgressBar();
+  }
+
+  function pauseAfterMs() {
+    // Short beat between mergers; still shortens a bit at higher speed
+    const speed = Number(els.speed.value || 1);
+    return (reduceMotion ? 220 : 700) / Math.sqrt(speed);
+  }
+
+  function advanceOrFinish() {
+    if (mergeIdx >= merges.length - 1) {
+      progress = 1;
+      pauseLeft = 0;
+      phase = "done";
+      setPlayLabel();
+      renderFrame();
+      setTimeout(() => {
+        if (phase === "done") {
+          resetStyles();
+          updateMergeStages();
+        }
+      }, 400);
+      updateProgressBar();
+      return false;
+    }
+    resetStyles();
+    mergeIdx += 1;
+    progress = 0;
+    pauseLeft = 0;
+    return true;
   }
 
   function tick(ts) {
@@ -582,27 +853,27 @@
     if (!lastTs) lastTs = ts;
     const dt = ts - lastTs;
     lastTs = ts;
+
+    if (pauseLeft > 0) {
+      pauseLeft -= dt;
+      progress = 1;
+      renderFrame();
+      if (pauseLeft <= 0) {
+        if (!advanceOrFinish()) return;
+      }
+      raf = requestAnimationFrame(tick);
+      return;
+    }
+
     const duration = (reduceMotion ? 280 : 1400) / Number(els.speed.value || 1);
     progress += dt / duration;
 
     if (progress >= 1) {
-      if (mergeIdx >= merges.length - 1) {
-        progress = 1;
-        phase = "done";
-        setPlayLabel();
-        renderFrame();
-        setTimeout(() => {
-          if (phase === "done") {
-            resetStyles();
-            updateMergeStages();
-          }
-        }, 400);
-        updateProgressBar();
-        return;
-      }
-      resetStyles();
-      mergeIdx += 1;
-      progress = 0;
+      progress = 1;
+      pauseLeft = pauseAfterMs();
+      renderFrame();
+      raf = requestAnimationFrame(tick);
+      return;
     }
 
     renderFrame();
@@ -617,6 +888,7 @@
     if (phase === "done" || mergeIdx >= merges.length - 1) {
       mergeIdx = 0;
       progress = 0;
+      pauseLeft = 0;
       resetStyles();
     }
     phase = "playing";
@@ -638,6 +910,7 @@
     phase = "idle";
     mergeIdx = 0;
     progress = 0;
+    pauseLeft = 0;
     if (raf) cancelAnimationFrame(raf);
     raf = null;
     lastTs = 0;

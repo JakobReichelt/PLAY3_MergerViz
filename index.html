@@ -43,7 +43,7 @@
         <svg
           class="merge-stage__svg"
           id="merge-svg-top"
-          viewBox="0 0 960 220"
+          viewBox="0 0 960 260"
           role="img"
           aria-label="Large merge diagram"
         ></svg>
@@ -72,8 +72,25 @@
             <input type="number" id="year-to" min="1990" max="2026" value="2026" />
           </label>
         </div>
-        <div class="progress-wrap">
-          <div class="progress-bar" id="progress-bar" style="width: 0%"></div>
+        <div
+          class="timeline"
+          id="timeline"
+          role="slider"
+          tabindex="0"
+          aria-label="Merger timeline"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0"
+        >
+          <div class="timeline__track" id="timeline-track">
+            <div class="timeline__fill" id="progress-bar"></div>
+            <div class="timeline__thumb" id="timeline-thumb"></div>
+          </div>
+          <div class="timeline__meta">
+            <span id="timeline-pos">0 / 0</span>
+            <span id="timeline-hint">Drag · click · scroll</span>
+            <span id="timeline-date"></span>
+          </div>
         </div>
       </section>
 
@@ -92,21 +109,6 @@
           </div>
         </div>
       </main>
-
-      <section
-        class="merge-stage merge-stage--mini"
-        id="merge-stage-bottom"
-        aria-label="Small merge preview"
-      >
-        <div class="merge-stage__meta merge-stage__meta--mini" id="merge-meta-bottom"></div>
-        <svg
-          class="merge-stage__svg merge-stage__svg--mini"
-          id="merge-svg-bottom"
-          viewBox="0 0 960 110"
-          role="img"
-          aria-label="Small merge diagram"
-        ></svg>
-      </section>
 
       <footer class="foot">
         <p id="foot-note"></p>
