@@ -43,7 +43,7 @@
         <svg
           class="merge-stage__svg"
           id="merge-svg-top"
-          viewBox="0 0 960 260"
+          viewBox="0 0 960 280"
           role="img"
           aria-label="Large merge diagram"
         ></svg>
@@ -71,6 +71,25 @@
             To
             <input type="number" id="year-to" min="1990" max="2026" value="2026" />
           </label>
+          <div class="search">
+            <label class="search__label" for="merge-search">Search</label>
+            <div class="search__box">
+              <input
+                type="search"
+                id="merge-search"
+                placeholder="Company, case id, title…"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <div
+                class="search__results"
+                id="search-results"
+                hidden
+                role="listbox"
+                aria-label="Matching mergers"
+              ></div>
+            </div>
+          </div>
         </div>
         <div
           class="timeline"

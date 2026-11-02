@@ -31,6 +31,8 @@
     foot: document.getElementById("foot-note"),
     metaTop: document.getElementById("merge-meta-top"),
     svgTop: document.getElementById("merge-svg-top"),
+    search: document.getElementById("merge-search"),
+    searchResults: document.getElementById("search-results"),
   };
 
   els.stats.innerHTML = [
@@ -149,6 +151,10 @@
   let mergedBubble = null;
   let trailLines = [];
   let isScrubbing = false;
+  /** Company IDs removed from the map after being absorbed in a completed merger. */
+  let gone = new Set();
+  /** Extra circle area (r²) added onto surviving companies from absorptions. */
+  let sizeBoost = new Map();
 
   function yearOf(m) {
     if (!m.date) return null;
@@ -172,20 +178,73 @@
     else els.play.textContent = "Play merges";
   }
 
-  function resetStyles() {
-    for (const [id, marker] of markers) {
-      const c = byId.get(id);
-      marker.setLatLng(baseLatLng.get(id));
-      marker.setStyle({
-        fillColor: "#4f8ea3",
-        color: "#0b1f2a",
-        weight: 1,
-        fillOpacity: 0.72,
-        opacity: 0.9,
-      });
-      marker.setRadius(radiusFor(c.revenue));
-      if (!map.hasLayer(marker)) marker.addTo(layer);
+  function baseRadius(id) {
+    const r0 = radiusFor(byId.get(id).revenue);
+    const boost = sizeBoost.get(id) || 0;
+    return Math.sqrt(r0 * r0 + boost);
+  }
+
+  function mergePartiesVisible(merge) {
+    return merge.parties.filter((id) => markers.has(id) && !gone.has(id));
+  }
+
+  function commitMergeAbsorption(merge) {
+    const ids = merge.parties.filter((id) => markers.has(id) && !gone.has(id));
+    if (ids.length < 2) return;
+    const dest = mergeDestination(ids);
+    let gained = 0;
+    for (const id of ids) {
+      if (id === dest.id) continue;
+      const r = baseRadius(id);
+      gained += r * r;
+      gone.add(id);
     }
+    sizeBoost.set(dest.id, (sizeBoost.get(dest.id) || 0) + gained);
+  }
+
+  /** Rebuild gone/sizeBoost for all mergers fully completed before `uptoIdx`, and optionally the current one if absorbed. */
+  function rebuildAbsorptionState(uptoIdx, includeCurrentIfAbsorbed) {
+    gone = new Set();
+    sizeBoost = new Map();
+    for (let i = 0; i < uptoIdx; i++) {
+      commitMergeAbsorption(merges[i]);
+    }
+    if (includeCurrentIfAbsorbed && merges[uptoIdx]) {
+      commitMergeAbsorption(merges[uptoIdx]);
+    }
+  }
+
+  function showRestingMarker(id, dimmed) {
+    const marker = markers.get(id);
+    if (!marker) return;
+    if (gone.has(id)) {
+      if (map.hasLayer(marker)) layer.removeLayer(marker);
+      return;
+    }
+    const c = byId.get(id);
+    marker.setLatLng(baseLatLng.get(id));
+    marker.setStyle({
+      fillColor: dimmed ? "#4f8ea3" : "#4f8ea3",
+      color: "#0b1f2a",
+      weight: 1,
+      fillOpacity: dimmed ? 0.2 : 0.72,
+      opacity: dimmed ? 0.35 : 0.9,
+    });
+    marker.setRadius(baseRadius(id));
+    if (!map.hasLayer(marker)) marker.addTo(layer);
+  }
+
+  function resetStyles() {
+    // Full restore — used only for hard Reset / idle
+    gone = new Set();
+    sizeBoost = new Map();
+    for (const id of markers.keys()) showRestingMarker(id, false);
+    clearTrails();
+    clearMergedBubble();
+  }
+
+  function applyRestingWorld(dimmed) {
+    for (const id of markers.keys()) showRestingMarker(id, dimmed);
     clearTrails();
     clearMergedBubble();
   }
@@ -236,12 +295,12 @@
       idx = merges.length - 1;
       prog = 1;
     }
-    if (idx !== mergeIdx) {
-      mergeIdx = idx;
-      resetStyles();
-    }
+    mergeIdx = idx;
     progress = prog;
     pauseLeft = 0;
+    const absorbedCurrent = prog >= 0.72;
+    rebuildAbsorptionState(idx, absorbedCurrent);
+    applyRestingWorld(true);
     if (phase === "idle" || phase === "done") phase = "paused";
     setPlayLabel();
     renderFrame();
@@ -375,8 +434,45 @@
     return byId.get(companyId)?.name || `Party ${fallbackIdx + 1}`;
   }
 
-  function diagramRadius(rev) {
-    return Math.max(28, radiusFor(rev) * 1.55);
+  /** Preview radii with area ∝ revenue (plus any absorption boost), fitted to the stage. */
+  function previewRadiiForPair(idA, idB) {
+    const maxR = 78;
+    const minR = 10;
+
+    function effectiveRevenue(id) {
+      const co = byId.get(id);
+      const rev = co?.revenue != null && co.revenue > 0 ? co.revenue : 0;
+      // sizeBoost is map-area units; map r≈5..27 → treat boost as share of a mid-size firm
+      const boost = sizeBoost.get(id) || 0;
+      const boostRev = boost > 0 ? Math.pow(10, 8 + (Math.sqrt(boost) / 27) * 3.7) : 0;
+      return Math.max(rev + boostRev, rev > 0 ? rev : 5e7);
+    }
+
+    const revA = effectiveRevenue(idA);
+    const revB = effectiveRevenue(idB);
+    const sA = Math.sqrt(revA);
+    const sB = Math.sqrt(revB);
+    const peak = Math.max(sA, sB) || 1;
+    let rA = (sA / peak) * maxR;
+    let rB = (sB / peak) * maxR;
+
+    // Keep tiny firms visible without collapsing the revenue ratio too much
+    const smallest = Math.min(rA, rB);
+    if (smallest < minR) {
+      const lift = minR / smallest;
+      const capped = Math.min(lift, (maxR * 1.05) / Math.max(rA, rB));
+      rA *= capped;
+      rB *= capped;
+      rA = Math.max(rA, minR);
+      rB = Math.max(rB, minR);
+    }
+
+    return {
+      rA,
+      rB,
+      revA: byId.get(idA)?.revenue ?? null,
+      revB: byId.get(idB)?.revenue ?? null,
+    };
   }
 
   function drawMergeDiagram(svg, merge, p) {
@@ -384,11 +480,11 @@
     while (svg.firstChild) svg.removeChild(svg.firstChild);
 
     const W = 960;
-    const H = 260;
-    const cy = 118;
+    const H = 280;
+    const cy = 120;
     const midX = W / 2;
-    const left0 = W * 0.22;
-    const right0 = W * 0.78;
+    const left0 = W * 0.2;
+    const right0 = W * 0.8;
 
     if (!merge) {
       const t = document.createElementNS(NS, "text");
@@ -421,8 +517,7 @@
     const bId = ids.find((id) => id !== aId) || ids[1];
     const aCo = byId.get(aId);
     const bCo = byId.get(bId);
-    const rA0 = diagramRadius(aCo.revenue);
-    const rB0 = diagramRadius(bCo.revenue);
+    const { rA: rA0, rB: rB0, revA, revB } = previewRadiiForPair(aId, bId);
     const rMerged = Math.sqrt(rA0 * rA0 + rB0 * rB0);
 
     // Smooth liquid timeline
@@ -590,7 +685,7 @@
       s1.setAttribute("text-anchor", "middle");
       s1.setAttribute("fill", "#5a7380");
       s1.setAttribute("font-size", "12");
-      s1.textContent = aCo.city || aCo.iso;
+      s1.textContent = `${aCo.city || aCo.iso} · ${formatRev(revA)}`;
       gL.appendChild(s1);
 
       const t2 = document.createElementNS(NS, "text");
@@ -609,7 +704,7 @@
       s2.setAttribute("text-anchor", "middle");
       s2.setAttribute("fill", "#5a7380");
       s2.setAttribute("font-size", "12");
-      s2.textContent = bCo.city || bCo.iso;
+      s2.textContent = `${bCo.city || bCo.iso} · ${formatRev(revB)}`;
       gL.appendChild(s2);
       svg.appendChild(gL);
     }
@@ -634,7 +729,9 @@
       sm.setAttribute("text-anchor", "middle");
       sm.setAttribute("fill", "#5a7380");
       sm.setAttribute("font-size", "12");
-      sm.textContent = `${merge.case_id} · merged`;
+      const mergedRev =
+        (revA || 0) + (revB || 0) > 0 ? formatRev((revA || 0) + (revB || 0)) : "n/a";
+      sm.textContent = `${merge.case_id} · merged · ${mergedRev}`;
       gM.appendChild(sm);
       svg.appendChild(gM);
     }
@@ -669,45 +766,57 @@
   function renderFrame() {
     const m = merges[mergeIdx];
     if (!m) {
+      applyRestingWorld(false);
       updateMergeStages();
       updateProgressBar();
       return;
     }
 
-    const ids = m.parties.filter((id) => markers.has(id));
-    if (ids.length < 2) {
-      updateMergeStages();
-      updateProgressBar();
-      return;
-    }
-
-    const dest = mergeDestination(ids);
-    const target = dest.latlng;
-    const movers = ids.filter((id) => id !== dest.id);
-    const targetR = combinedRadius(ids);
-    const p = progress;
-    const travelEnd = 0.58;
-    const absorbEnd = 0.72;
+    // Keep prior absorptions applied; current merge not committed until absorb finishes
+    rebuildAbsorptionState(mergeIdx, progress >= 0.72);
+    const ids = mergePartiesVisible(m);
+    // If already absorbed this merge, ids may be just the survivor — still animate hold
+    const idsForAnim =
+      ids.length >= 2
+        ? ids
+        : m.parties.filter((id) => markers.has(id));
 
     clearTrails();
     clearMergedBubble();
 
-    for (const [id, marker] of markers) {
-      if (ids.includes(id)) continue;
-      marker.setLatLng(baseLatLng.get(id));
-      marker.setStyle({
-        fillColor: "#4f8ea3",
-        color: "#0b1f2a",
-        weight: 1,
-        fillOpacity: 0.14,
-        opacity: 0.28,
-      });
-      marker.setRadius(radiusFor(byId.get(id).revenue));
-      if (!map.hasLayer(marker)) marker.addTo(layer);
+    const dimOthers = phase === "playing" || phase === "paused" || phase === "done";
+    for (const id of markers.keys()) {
+      if (idsForAnim.includes(id) && progress < 0.72) continue;
+      showRestingMarker(id, dimOthers && !gone.has(id));
     }
 
+    if (idsForAnim.length < 2 && progress < 0.72) {
+      updateMergeStages();
+      updateProgressBar();
+      return;
+    }
+
+    const liveIds = idsForAnim.filter((id) => !gone.has(id));
+    const dest = mergeDestination(liveIds.length ? liveIds : idsForAnim);
+    const target = dest.latlng;
+    const movers = liveIds.filter((id) => id !== dest.id);
+    const activeIds = [dest.id, ...movers].filter((id) => markers.has(id));
+    const targetR =
+      progress >= 0.72
+        ? baseRadius(dest.id)
+        : Math.sqrt(
+            activeIds.reduce((s, id) => {
+              const r = baseRadius(id);
+              return s + r * r;
+            }, 0)
+          );
+
+    const p = progress;
+    const travelEnd = 0.58;
+    const absorbEnd = 0.72;
+
     const home = markers.get(dest.id);
-    if (home) {
+    if (home && !gone.has(dest.id)) {
       home.setLatLng(target);
       home.setStyle({
         fillColor: "#e85d04",
@@ -721,7 +830,7 @@
 
     if (p < travelEnd) {
       const e = easeInOut(p / travelEnd);
-      if (home) home.setRadius(radiusFor(byId.get(dest.id).revenue));
+      if (home) home.setRadius(baseRadius(dest.id));
 
       for (const id of movers) {
         const marker = markers.get(id);
@@ -736,7 +845,7 @@
           fillOpacity: 0.95,
           opacity: 1,
         });
-        marker.setRadius(radiusFor(byId.get(id).revenue));
+        marker.setRadius(baseRadius(id));
         if (!map.hasLayer(marker)) marker.addTo(layer);
 
         trailLines.push(
@@ -745,12 +854,13 @@
             weight: 1.4,
             opacity: 0.35 * (1 - e * 0.5),
             interactive: false,
+            pane: "mergePane",
           }).addTo(map)
         );
       }
     } else if (p < absorbEnd) {
       const e = easeInOut((p - travelEnd) / (absorbEnd - travelEnd));
-      const homeR0 = radiusFor(byId.get(dest.id).revenue);
+      const homeR0 = baseRadius(dest.id);
       if (home) {
         home.setLatLng(target);
         home.setRadius(homeR0 + (targetR - homeR0) * e);
@@ -758,7 +868,7 @@
 
       for (const id of movers) {
         const marker = markers.get(id);
-        const r0 = radiusFor(byId.get(id).revenue);
+        const r0 = baseRadius(id);
         marker.setLatLng(target);
         marker.setRadius(Math.max(0.5, r0 * (1 - e)));
         marker.setStyle({
@@ -771,49 +881,47 @@
         if (!map.hasLayer(marker)) marker.addTo(layer);
       }
     } else {
-      for (const id of ids) {
+      // Absorbed: movers stay gone; survivor remains (grown)
+      for (const id of movers) {
         const marker = markers.get(id);
-        if (map.hasLayer(marker)) layer.removeLayer(marker);
+        if (marker && map.hasLayer(marker)) layer.removeLayer(marker);
       }
-
-      const hold = (p - absorbEnd) / (1 - absorbEnd);
-      const pulse = reduceMotion ? 1 : 1 + 0.06 * Math.sin(hold * Math.PI);
-      mergedBubble = L.circleMarker(target, {
-        radius: targetR * pulse,
-        color: "#ffb703",
-        weight: 3,
-        fillColor: "#e85d04",
-        fillOpacity: 0.92,
-        opacity: 1,
-        interactive: false,
-        pane: "mergePane",
-      }).addTo(map);
-
-      trailLines.push(
-        L.circleMarker(target, {
-          radius: targetR * (1.15 + hold * 0.55),
+      if (home) {
+        home.setLatLng(target);
+        home.setStyle({
+          fillColor: "#e85d04",
           color: "#ffb703",
-          weight: 2,
-          fillOpacity: 0,
-          opacity: Math.max(0, 0.55 - hold * 0.55),
-          interactive: false,
-          pane: "mergePane",
-        }).addTo(map)
-      );
-    }
+          weight: 3,
+          fillOpacity: 0.92,
+          opacity: 1,
+        });
+        const hold = (p - absorbEnd) / (1 - absorbEnd);
+        const pulse = reduceMotion ? 1 : 1 + 0.06 * Math.sin(hold * Math.PI);
+        home.setRadius(baseRadius(dest.id) * pulse);
+        if (!map.hasLayer(home)) home.addTo(layer);
+        home.bringToFront();
 
-    // Draw merging companies above every other bubble
-    for (const id of ids) {
-      const marker = markers.get(id);
-      if (!marker) continue;
-      const el = marker.getElement && marker.getElement();
-      if (el && el.parentElement) {
-        el.parentElement.appendChild(el);
-      } else if (marker.bringToFront) {
-        marker.bringToFront();
+        trailLines.push(
+          L.circleMarker(target, {
+            radius: baseRadius(dest.id) * (1.15 + hold * 0.45),
+            color: "#ffb703",
+            weight: 2,
+            fillOpacity: 0,
+            opacity: Math.max(0, 0.55 - hold * 0.55),
+            interactive: false,
+            pane: "mergePane",
+          }).addTo(map)
+        );
       }
     }
-    if (mergedBubble && mergedBubble.bringToFront) mergedBubble.bringToFront();
+
+    for (const id of activeIds) {
+      const marker = markers.get(id);
+      if (!marker || !map.hasLayer(marker)) continue;
+      const el = marker.getElement && marker.getElement();
+      if (el && el.parentElement) el.parentElement.appendChild(el);
+      else if (marker.bringToFront) marker.bringToFront();
+    }
 
     updateMergeStages();
     updateProgressBar();
@@ -831,17 +939,15 @@
       pauseLeft = 0;
       phase = "done";
       setPlayLabel();
-      renderFrame();
-      setTimeout(() => {
-        if (phase === "done") {
-          resetStyles();
-          updateMergeStages();
-        }
-      }, 400);
+      rebuildAbsorptionState(merges.length, false);
+      applyRestingWorld(false);
+      updateMergeStages();
       updateProgressBar();
       return false;
     }
-    resetStyles();
+    // Commit current merger, then start the next — absorbed bubbles stay gone
+    rebuildAbsorptionState(mergeIdx + 1, false);
+    applyRestingWorld(true);
     mergeIdx += 1;
     progress = 0;
     pauseLeft = 0;
@@ -924,7 +1030,156 @@
     if (phase === "playing") pause();
     merges = filterMerges();
     reset();
+    hideSearchResults();
   }
+
+  let searchHits = [];
+  let searchActive = -1;
+  let searchTimer = null;
+
+  function hideSearchResults() {
+    els.searchResults.hidden = true;
+    els.searchResults.innerHTML = "";
+    searchHits = [];
+    searchActive = -1;
+  }
+
+  function mergeSearchBlob(m) {
+    const parts = [m.case_id, m.title, m.date, ...(m.labels || [])];
+    for (const id of m.parties || []) {
+      const c = byId.get(id);
+      if (c) parts.push(c.name, c.city, c.iso);
+    }
+    return parts.join(" ").toLowerCase();
+  }
+
+  function searchMerges(query) {
+    const q = query.trim().toLowerCase();
+    if (q.length < 2) return [];
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const scored = [];
+    for (let i = 0; i < merges.length; i++) {
+      const m = merges[i];
+      const blob = mergeSearchBlob(m);
+      if (!tokens.every((t) => blob.includes(t))) continue;
+      let score = 0;
+      const idLower = String(m.case_id).toLowerCase();
+      if (idLower === q || idLower === `m.${q.replace(/^m\./, "")}`) score += 50;
+      if (idLower.includes(q)) score += 20;
+      for (const label of m.labels || []) {
+        const ll = label.toLowerCase();
+        if (ll === q) score += 40;
+        else if (ll.startsWith(q)) score += 25;
+        else if (ll.includes(q)) score += 10;
+      }
+      if (String(m.title).toLowerCase().includes(q)) score += 8;
+      scored.push({ i, m, score });
+    }
+    scored.sort((a, b) => b.score - a.score || a.i - b.i);
+    return scored.slice(0, 40);
+  }
+
+  function renderSearchResults(hits) {
+    searchHits = hits;
+    searchActive = hits.length ? 0 : -1;
+    if (!hits.length) {
+      els.searchResults.hidden = false;
+      els.searchResults.innerHTML =
+        '<div class="search__empty">No mergers match this search</div>';
+      return;
+    }
+    els.searchResults.hidden = false;
+    els.searchResults.innerHTML = hits
+      .map((hit, idx) => {
+        const parties = (hit.m.labels || []).slice(0, 3).join(" / ");
+        return `<button type="button" class="search__hit${
+          idx === 0 ? " is-active" : ""
+        }" role="option" data-idx="${hit.i}">
+          <span class="search__hit-id">${escapeHtml(hit.m.case_id)} · ${escapeHtml(
+            hit.m.date || "—"
+          )}</span>
+          <span class="search__hit-meta">${escapeHtml(
+            parties || hit.m.title
+          )}</span>
+        </button>`;
+      })
+      .join("");
+  }
+
+  function jumpToMergeIndex(i) {
+    if (!merges.length || i < 0 || i >= merges.length) return;
+    if (phase === "playing") {
+      phase = "paused";
+      setPlayLabel();
+      if (raf) cancelAnimationFrame(raf);
+      raf = null;
+      lastTs = 0;
+    }
+    // Show parties before they fuse
+    seekToFraction((i + 0.15) / merges.length);
+    hideSearchResults();
+    els.search.blur();
+  }
+
+  function updateSearchActive(next) {
+    if (!searchHits.length) return;
+    searchActive = (next + searchHits.length) % searchHits.length;
+    const buttons = els.searchResults.querySelectorAll(".search__hit");
+    buttons.forEach((btn, idx) => {
+      btn.classList.toggle("is-active", idx === searchActive);
+      if (idx === searchActive) btn.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  els.search.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      const q = els.search.value;
+      if (q.trim().length < 2) {
+        hideSearchResults();
+        return;
+      }
+      renderSearchResults(searchMerges(q));
+    }, 120);
+  });
+
+  els.search.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      hideSearchResults();
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      updateSearchActive(searchActive + 1);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      updateSearchActive(searchActive - 1);
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (searchActive >= 0 && searchHits[searchActive]) {
+        jumpToMergeIndex(searchHits[searchActive].i);
+      } else {
+        const hits = searchMerges(els.search.value);
+        if (hits.length) jumpToMergeIndex(hits[0].i);
+      }
+    }
+  });
+
+  els.searchResults.addEventListener("click", (e) => {
+    const btn = e.target.closest(".search__hit");
+    if (!btn) return;
+    jumpToMergeIndex(Number(btn.dataset.idx));
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!els.searchResults.hidden && !e.target.closest(".search")) {
+      hideSearchResults();
+    }
+  });
 
   els.play.addEventListener("click", () => {
     if (phase === "playing") pause();

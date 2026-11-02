@@ -104,11 +104,14 @@ h1 {
 }
 
 .controls {
+  position: relative;
+  z-index: 30;
   background: rgba(255, 255, 255, 0.78);
   border: 1px solid var(--line);
   border-radius: calc(var(--radius) + 4px);
   padding: 14px 16px 12px;
   backdrop-filter: blur(8px);
+  overflow: visible;
 }
 
 .control-row {
@@ -178,6 +181,98 @@ h1 {
 
 .year-filter input {
   width: 78px;
+}
+
+.search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 220px;
+  min-width: 200px;
+  max-width: 360px;
+  color: var(--muted);
+  font-size: 13px;
+  position: relative;
+}
+
+.search__label {
+  flex-shrink: 0;
+}
+
+.search__box {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.search__box input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.search__box input:focus {
+  outline: 2px solid rgba(232, 93, 4, 0.35);
+  outline-offset: 1px;
+  border-color: var(--signal);
+}
+
+.search__results {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 50;
+  max-height: 280px;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 12px 28px rgba(11, 31, 42, 0.16);
+}
+
+.search__hit {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  padding: 10px 12px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--ink);
+}
+
+.search__hit:last-child {
+  border-bottom: 0;
+}
+
+.search__hit:hover,
+.search__hit.is-active {
+  background: rgba(232, 93, 4, 0.08);
+}
+
+.search__hit-id {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.search__hit-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.search__empty {
+  padding: 12px;
+  font-size: 13px;
+  color: var(--muted);
 }
 
 .merge-stage {
@@ -301,6 +396,7 @@ h1 {
 
 .map-shell {
   position: relative;
+  z-index: 1;
   border-radius: 18px;
   overflow: hidden;
   border: 1px solid var(--line);
