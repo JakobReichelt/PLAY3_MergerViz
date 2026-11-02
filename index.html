@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orbis × EU Merger Map</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Syne:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="top">
+        <div class="brand-block">
+          <p class="eyebrow">Play 3 · Orbis ∩ case data</p>
+          <h1>Merger map</h1>
+          <p class="lede">
+            Companies present in both the Orbis export and EU merger cases.
+            Play to watch co-notified parties pull together.
+          </p>
+        </div>
+        <div class="stats" id="stats" aria-live="polite"></div>
+      </header>
+
+      <section
+        class="merge-stage merge-stage--hero"
+        id="merge-stage-top"
+        aria-label="Current merging companies"
+      >
+        <div class="merge-stage__meta" id="merge-meta-top">
+          <span class="merge-stage__idle">Press Play to watch a merger</span>
+        </div>
+        <svg
+          class="merge-stage__svg"
+          id="merge-svg-top"
+          viewBox="0 0 960 220"
+          role="img"
+          aria-label="Large merge diagram"
+        ></svg>
+      </section>
+
+      <section class="controls" aria-label="Playback controls">
+        <div class="control-row">
+          <button type="button" id="btn-play" class="btn primary">Play merges</button>
+          <button type="button" id="btn-reset" class="btn ghost">Reset</button>
+          <label class="speed">
+            Speed
+            <select id="speed" aria-label="Playback speed">
+              <option value="0.5">0.5×</option>
+              <option value="1" selected>1×</option>
+              <option value="2">2×</option>
+              <option value="4">4×</option>
+              <option value="8">8×</option>
+            </select>
+          </label>
+          <label class="year-filter">
+            From
+            <input type="number" id="year-from" min="1990" max="2026" value="1990" />
+          </label>
+          <label class="year-filter">
+            To
+            <input type="number" id="year-to" min="1990" max="2026" value="2026" />
+          </label>
+        </div>
+        <div class="progress-wrap">
+          <div class="progress-bar" id="progress-bar" style="width: 0%"></div>
+        </div>
+      </section>
+
+      <main class="map-shell">
+        <div id="map" role="application" aria-label="World map of matched companies"></div>
+        <aside class="tooltip" id="tooltip" hidden></aside>
+        <div class="legend">
+          <div class="legend-item">
+            <span class="swatch company"></span> Company (size ∝ log revenue)
+          </div>
+          <div class="legend-item">
+            <span class="swatch active"></span> Active merger parties
+          </div>
+          <div class="legend-item">
+            <span class="swatch merge"></span> Merged entity
+          </div>
+        </div>
+      </main>
+
+      <section
+        class="merge-stage merge-stage--mini"
+        id="merge-stage-bottom"
+        aria-label="Small merge preview"
+      >
+        <div class="merge-stage__meta merge-stage__meta--mini" id="merge-meta-bottom"></div>
+        <svg
+          class="merge-stage__svg merge-stage__svg--mini"
+          id="merge-svg-bottom"
+          viewBox="0 0 960 110"
+          role="img"
+          aria-label="Small merge diagram"
+        ></svg>
+      </section>
+
+      <footer class="foot">
+        <p id="foot-note"></p>
+      </footer>
+    </div>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="js/data.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>
